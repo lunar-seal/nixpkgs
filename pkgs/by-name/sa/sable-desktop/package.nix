@@ -20,7 +20,7 @@
   libayatana-appindicator,
   wrapGAppsHook3,
   stdenv,
-  runtime ? if stdenv.hostPlatform.isDarwin || stdenv.hostPlatform.isAarch64 then "wry" else "cef",
+  runtime ? if stdenv.hostPlatform.isDarwin then "wry" else "cef",
   withScreenSharing ? true,
 }:
 
@@ -185,10 +185,10 @@ rustPlatform.buildRustPackage (finalAttrs: {
       toasteruwu
       lunar-seal
     ];
-    license = with lib.licenses; [
-      agpl3Only
-      bsd3
-    ];
+    license = [
+      lib.licenses.agpl3Only
+    ]
+    ++ lib.optional isCef lib.licenses.bsd3;
     mainProgram = "sable";
     platforms = [
       "x86_64-linux"

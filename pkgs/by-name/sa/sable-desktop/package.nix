@@ -5,6 +5,8 @@
   cargo-tauri,
   cef-binary,
   desktop-file-utils,
+  glib-networking,
+  gst_all_1,
   gtk3,
   libGL,
   libpulseaudio,
@@ -17,10 +19,22 @@
   xdg-utils,
   libayatana-appindicator,
   wrapGAppsHook3,
+  stdenv,
+  runtime ? if stdenv.hostPlatform.isDarwin || stdenv.hostPlatform.isAarch64 then "wry" else "cef",
   withScreenSharing ? true,
 }:
 
+assert lib.assertOneOf "runtime" runtime [
+  "cef"
+  "wry"
+];
+# cef-binary does not support aarch64-darwin
+assert lib.assertMsg (
+  !(stdenv.hostPlatform.isDarwin && runtime == "cef")
+) "sable-desktop: CEF is unsupported on aarch64-darwin";
+
 let
+  isCef = runtime == "cef";
   frontend = sable-unwrapped.overrideAttrs (oldAttrs: {
     version = "1.20.1-nightly.260730155923";
     src = oldAttrs.src.override {
@@ -32,7 +46,7 @@ let
       outputHash = "sha256-RUyjP9tJ9BrF23IvbvDujXFDn6be0ddxV5b4etMJDeg=";
     };
     env = oldAttrs.env // {
-      TAURI_ENV_PLATFORM = "linux";
+      TAURI_ENV_PLATFORM = if stdenv.hostPlatform.isDarwin then "macos" else "linux";
     };
   });
   cef =
@@ -40,7 +54,10 @@ let
       version = "150.0.14";
       gitRevision = "7c1aa68";
       chromiumVersion = "150.0.7871.129";
-      srcHashes.x86_64-linux = "sha256-QO9hPkVcrNB6p8gfQl76qLb3frg/E8wo1HDuuk5h+Y8=";
+      srcHashes = {
+        x86_64-linux = "sha256-QO9hPkVcrNB6p8gfQl76qLb3frg/E8wo1HDuuk5h+Y8=";
+        aarch64-linux = "sha256-tA4hWg9G/UDQSxXUuDO+IRjvc8Qx1cEdGOtiXg3ktk0=";
+      };
     }).overrideAttrs
       (_: {
         dontStrip = false;
@@ -52,7 +69,8 @@ let
           }" "$out/Release/libcef.so"
         '';
       });
-  # https://github.com/tauri-apps/cef-rs/issues/426
+  # fake archive.json to prevent automatically downloading CEF here
+  # as per https://github.com/tauri-apps/cef-rs/issues/426
   cefArchive = writeText "archive.json" (
     builtins.toJSON {
       name = cef.src.name;
@@ -74,11 +92,10 @@ rustPlatform.buildRustPackage (finalAttrs: {
   cargoDepsName = finalAttrs.pname;
 
   tauriBuildFlags = "--no-sign";
-  tauriBundleType = "deb";
   buildNoDefaultFeatures = true;
   buildFeatures = [
+    runtime
     "custom-protocol"
-    "cef"
   ];
 
   postPatch = ''
@@ -92,48 +109,76 @@ rustPlatform.buildRustPackage (finalAttrs: {
 
   nativeBuildInputs = [
     cargo-tauri.hook
+    pkg-config
+  ]
+  ++ lib.optionals stdenv.hostPlatform.isLinux [
     wrapGAppsHook3
     desktop-file-utils
-    pkg-config
   ];
 
-  buildInputs = [
-    gtk3
-    # needed at least until https://github.com/tauri-apps/tauri/pull/15068 gets merged
-    webkitgtk_4_1
-    libayatana-appindicator
-  ];
+  buildInputs = lib.optionals stdenv.hostPlatform.isLinux (
+    [
+      gtk3
+      # needed at least until https://github.com/tauri-apps/tauri/pull/15068 gets merged
+      webkitgtk_4_1
+      libayatana-appindicator
+    ]
+    ++ lib.optionals (!isCef) (
+      [ glib-networking ]
+      ++ (with gst_all_1; [
+        gstreamer
+        gst-plugins-base
+        gst-plugins-good
+        gst-plugins-bad
+        gst-plugins-ugly
+        gst-libav
+      ])
+    )
+  );
 
-  preBuild = ''
+  preBuild = lib.optionalString isCef ''
     export CEF_PATH="$(realpath -E cef)"
     mkdir -p "$CEF_PATH"
     ln -s ${cef}/${cef.buildType}/* ${cef}/Resources/* ${cef}/libcef_dll "$CEF_PATH/"
     ln -s ${cefArchive} "$CEF_PATH/archive.json"
   '';
 
-  preFixup = ''
-    gappsWrapperArgs+=(
-      --prefix PATH : "${lib.makeBinPath [ xdg-utils ]}"
-      --prefix LD_LIBRARY_PATH : "${
-        lib.makeLibraryPath [
-          libayatana-appindicator
-          libGL
-          libxkbcommon
-        ]
-      }:${addDriverRunpath.driverLink}/lib"
-    )
-  '';
+  preFixup =
+    lib.optionalString stdenv.hostPlatform.isLinux ''
+      gappsWrapperArgs+=(
+        --prefix PATH : "${lib.makeBinPath [ xdg-utils ]}"
+        --prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath [ libayatana-appindicator ]}"
+      )
+    ''
+    + lib.optionalString (!isCef && stdenv.hostPlatform.isLinux) ''
+      gappsWrapperArgs+=(
+        --prefix WEBKIT_GST_ALLOWED_URI_PROTOCOLS , "sable-media"
+      )
+    ''
+    + lib.optionalString isCef ''
+      gappsWrapperArgs+=(
+        --prefix LD_LIBRARY_PATH : "${
+          lib.makeLibraryPath [
+            libGL
+            libxkbcommon
+          ]
+        }:${addDriverRunpath.driverLink}/lib"
+      )
+    '';
 
-  postFixup = ''
-    ln -s ${cef}/${cef.buildType}/* ${cef}/Resources/* "$out/bin/"
-    desktop-file-edit \
-      --set-key="Categories" --set-value="Network;InstantMessaging;Chat;" \
-      --set-key="Exec" --set-value="sable %u" \
-      "$out/share/applications/Sable.desktop"
-  '';
+  postFixup =
+    lib.optionalString isCef ''
+      ln -s ${cef}/${cef.buildType}/* ${cef}/Resources/* "$out/bin/"
+    ''
+    + lib.optionalString stdenv.hostPlatform.isLinux ''
+      desktop-file-edit \
+        --set-key="Categories" --set-value="Network;InstantMessaging;Chat;" \
+        --set-key="Exec" --set-value="sable %u" \
+        "$out/share/applications/Sable.desktop"
+    '';
 
   meta = {
-    description = "Almost stable Matrix client focused on quality-of-life features";
+    description = "An almost stable Matrix client";
     homepage = "https://github.com/SableClient/Sable";
     changelog = "https://github.com/SableClient/Sable/blob/${finalAttrs.src.rev}/CHANGELOG.md";
     maintainers = with lib.maintainers; [
@@ -144,10 +189,14 @@ rustPlatform.buildRustPackage (finalAttrs: {
       bsd3
     ];
     mainProgram = "sable";
-    platforms = [ "x86_64-linux" ];
-    sourceProvenance = with lib.sourceTypes; [
-      fromSource
-      binaryNativeCode
+    platforms = [
+      "x86_64-linux"
+      "aarch64-darwin"
+      "aarch64-linux"
     ];
+    sourceProvenance = [
+      lib.sourceTypes.fromSource
+    ]
+    ++ lib.optional isCef lib.sourceTypes.binaryNativeCode;
   };
 })

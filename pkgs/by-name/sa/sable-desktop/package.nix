@@ -182,6 +182,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
     homepage = "https://github.com/SableClient/Sable";
     changelog = "https://github.com/SableClient/Sable/blob/${finalAttrs.src.rev}/CHANGELOG.md";
     maintainers = with lib.maintainers; [
+      toasteruwu
       lunar-seal
     ];
     license = with lib.licenses; [

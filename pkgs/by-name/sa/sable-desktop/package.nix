@@ -105,6 +105,10 @@ rustPlatform.buildRustPackage (finalAttrs: {
     substituteInPlace src-tauri/src/lib.rs \
       --replace-fail "                use tauri_plugin_deep_link::DeepLinkExt;" "" \
       --replace-fail "                app.deep_link().register_all()?;" ""
+  ''
+  + lib.optionalString isCef ''
+    substituteInPlace "$cargoDepsCopy"/source-git-*/tauri-runtime-cef-*/src/webview.rs \
+      --replace-fail '                window_id: *$self.window_id.lock().unwrap(),' '                window_id: { let id = *$self.window_id.lock().unwrap(); id },'
   '';
 
   nativeBuildInputs = [

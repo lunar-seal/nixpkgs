@@ -4,6 +4,7 @@
   addDriverRunpath,
   cargo-tauri,
   cef-binary,
+  darwinMinVersionHook,
   desktop-file-utils,
   fetchFromGitHub,
   fetchPnpmDeps,
@@ -21,6 +22,7 @@
   swiftpm,
   symlinkJoin,
   webkitgtk_4_1,
+  writableTmpDirAsHomeHook,
   writeText,
   xdg-utils,
   libayatana-appindicator,
@@ -129,6 +131,9 @@ rustPlatform.buildRustPackage (finalAttrs: {
   ++ lib.optionals stdenv.hostPlatform.isDarwin [
     swift
     swiftpm
+    # swiftpm wants to write to home
+    writableTmpDirAsHomeHook
+    (darwinMinVersionHook "14.0")
   ];
 
   buildInputs = lib.optionals isCef [

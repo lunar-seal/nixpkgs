@@ -17,6 +17,8 @@
   pkg-config,
   pnpm_10,
   pnpmConfigHook,
+  swift,
+  swiftpm,
   symlinkJoin,
   webkitgtk_4_1,
   writeText,
@@ -123,6 +125,10 @@ rustPlatform.buildRustPackage (finalAttrs: {
   ++ lib.optionals isCef [
     wrapGAppsHook3
     desktop-file-utils
+  ]
+  ++ lib.optionals stdenv.hostPlatform.isDarwin [
+    swift
+    swiftpm
   ];
 
   buildInputs = lib.optionals isCef [
